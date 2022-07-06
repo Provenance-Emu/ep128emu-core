@@ -936,7 +936,7 @@ bool retro_load_game(const struct retro_game_info *info)
     int detectedMachineDetailedType = Ep128Emu::VM_config.at("VM_CONFIG_UNKNOWN");
 
     // start with longer magic strings - less chance of mis-detection
-    if(header_match(cpcDskFileHeader,tmpBuf,11) or header_match(cpcExtFileHeader,tmpBuf,21))
+    if(header_match(cpcDskFileHeader,tmpBuf,11) || header_match(cpcExtFileHeader,tmpBuf,21))
     {
       detectedMachineDetailedType = Ep128Emu::VM_config.at("CPC_DISK");
       diskContent=true;
