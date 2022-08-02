@@ -51,8 +51,8 @@ LibretroCore::LibretroCore(retro_log_printf_t log_cb_, int machineDetailedType_,
   romBasePath.append("\\ep128emu\\roms\\");
   configBaseFile.append("\\ep128emu\\config\\");
 #else
-  romBasePath.append("/ep128emu/roms/");
-  configBaseFile.append("/ep128emu/config/");
+//  romBasePath.append("/ep128emu/roms/");
+//  configBaseFile.append("/ep128emu/config/");
 #endif
 
   if(machineDetailedType == VM_config.at("TVC64_DISK") || machineDetailedType == VM_config.at("TVC64_FILE")
