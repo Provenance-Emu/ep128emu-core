@@ -86,7 +86,7 @@ namespace Ep128Emu {
     //printf("Trying forwardAudioData: %d %d\n",readBufIndex,writeBufIndex);
 
     int currOutputIndex = -1;
-    int expectedLatencyFrames = 2000;
+    int expectedLatencyFrames = 800;
     size_t ringBufferSize = buffers.size();
     int partialFrames_pre = LIBRETRO_PERIOD_SIZE - readSubBufIndex;
 
@@ -117,7 +117,10 @@ namespace Ep128Emu {
     signed int framesToSend = 0;
     // slowly try to pull frames towards the expected amount
     framesToSend = expectedFrames + (availableFrames - expectedFrames - expectedLatencyFrames)/100;
-    if (framesToSend > availableFrames) framesToSend = availableFrames;
+    if (framesToSend > availableFrames) {
+      framesToSend = availableFrames;
+      //printf("Audio buffer underrun: rd %d wr %d av %d exp %d fts %d\n",readBufIndex,writeBufIndex_, availableFrames, expectedFrames, framesToSend);
+    }
     //printf("Trying forwardAudioData: rd %d wr %d av %d exp %d fts %d\n",readBufIndex,writeBufIndex_, availableFrames, expectedFrames, framesToSend);
 
     for (signed int i=0; i<framesToSend; i++)

@@ -5,17 +5,20 @@ Leverage the convenience of libretro/retroarch to emulate the Z80 based home
 computers that the original ep128emu supports - that is, Enterprise 64/128, 
 Videoton TVC, Amstrad CPC and ZX Spectrum. Focus is on Enterprise and TVC.
 
+Note: The actual documentation is best viewed in [Retroarch docs](https://docs.libretro.com/library/ep128emu/). Source for maintenance is in [libretro docs repo](https://github.com/libretro/docs/blob/master/docs/library/ep128emu.md). Standalone version also has a few fixes, see [standalone README](https://github.com/libretro/ep128emu-core/blob/standalone/README).
+
 ## Features
 
 For the emulation features, see the [original README](README). Since GUI is replaced by retroarch, features that would require own window (debugger, keyboard layout setting, etc) are not available. Some extra features not required for original games are also excluded (SD card, SID, MIDI, Spectrum emulation card for EP, mouse).
 
 ### Content types supported:
 * Enterprise disk images: `img`, `dsk`
-* Enterprise tape images: `tap` (either ep128emu or epte format)
+* Enterprise tape images: `tap` (either ep128emu, tapir, or epte format)
 * Enterprise compressed files: `dtf` (via "ZozoTools" ROM)
 * Enterprise direct files: `com`, `trn`, `128`, `bas` or `.` (no extension)
 * TVC disk images: `img`, `dsk` (TVC type guess from disk layout)
 * TVC direct files: `cas`
+* TVC tape images: `tvcwav` (PCM WAV format, 1-bit versions also supported)
 * CPC disk images: `img`, `dsk` (CPCEMU and extended formats)
 * CPC tape images: `cdt`
 * Spectrum tape images: `tzx`
@@ -51,7 +54,9 @@ For most content types, there is a startup sequence that will do the program loa
 
 ### Other features
 * Save/load state, rewind
+* Memory maps exposed for cheat support
 * Content autostart except for disk images
+* Disk change support for multi-disk (or multi-tape) games
 * Customizable configuration (per-content or system-wide)
   * See [sample.ep128cfg](core/sample.ep128cfg) for details
   * User 1 button map can be finetuned
@@ -63,28 +68,23 @@ For most content types, there is a startup sequence that will do the program loa
 * Fit to content
   * Pressing **R3** will zoom in to the actual content, cropping black/single-colored borders
   * Borders can be cropped completely (default) or using a margin configurable among core options
+* LED driver support, add following to `retroarch.cfg` to use Scroll Lock led for floppy activity:
+```shell
+led_driver="keyboard"
+led1_map = "-1"
+led2_map = "-1"
+led3_map = "2" 
+```  
 
-## Using the binaries
+## Using the core
 
 ### Requirements
 
-* A system with retroarch installed. Linux 64-bit, ARM 32-bit, and Windows 32 and 64 bit versions of the core are currently available.
-* ROM files for the systems to be emulated.
-  * Enterprise: `exos21.rom`, `basic21.rom`, `epfileio.rom`, `exdos13.rom`
-    * [epfileio.rom](roms/epfileio.rom) is a special image for ep128emu, needed only for direct file loading
-    * For extra functions: `exos24uk.rom` (fast memory test), `zt19uk.rom` (DTF support)
-    * For EP64: `exos20.rom`, `basic20.rom`
-    * TOSEC ROMs can also be used, exact file names can be checked at [core.hpp](core/core.hpp)
-  * TVC: `tvc22_sys.rom`, `tvc22_ext.rom`, `tvcfileio.rom`, `tvc_dos12d.rom`
-    * [tvcfileio.rom](roms/tvcfileio.rom) is a special image for ep128emu, needed only for direct file loading
-    * ROMs from tvc.homeserver.hu can also be used, exact file names can be checked at [core.hpp](core/core.hpp)
-  * CPC: `cpc6128.rom`, `cpc_amsdos.rom`
-    * TOSEC ROMs can also be used, exact file names can be checked at [core.hpp](core/core.hpp)
-  * ZX: `zx128.rom`
-    * TOSEC ROMs or [retroarch-system](https://github.com/Abdess/retroarch_system/tree/libretro/Sinclair%20-%20ZX%20Spectrum) ROMs can also be used, exact file names can be checked at [core.hpp](core/core.hpp)
-* Put the files to `ep128emu/roms` inside retroarch system directory. Example: `~/.config/retroarch/system/ep128emu/roms/`
+* A system with retroarch installed. Linux 64-bit, ARM 32-bit, MacOS, and Windows 32 and 64 bit versions of the core are currently available.
+* From version 1.1.0, default ROM versions are built in, no need to download separately.
 
 ### Running the core
+On the supported platforms, the core appears in the online updater, can be downloaded and started as usual. Running it directly:
 ```shell
 # Linux
 retroarch -L ep128emu_core_libretro.so -v <content file>
@@ -94,7 +94,7 @@ retroarch -L ep128emu_core_libretro.dll -v <content file>
 
 ## Contributing
 
-Pull requests welcome. Especially for currently unsupported builds (like MacOS).
+Pull requests welcome. For updating emulation features, it may be better to push it to original ep128emu as well.
 
 ## Links
 

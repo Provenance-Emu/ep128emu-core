@@ -30,12 +30,12 @@ include:
     file: '/linux-i686.yml'
 
   # MacOS 64-bit
-  #- project: 'libretro-infrastructure/ci-templates'
-  #  file: '/osx-x64.yml'
+  - project: 'libretro-infrastructure/ci-templates'
+    file: '/osx-x64.yml'
 
   # MacOS ARM 64-bit
-  #- project: 'libretro-infrastructure/ci-templates'
-  #  file: '/osx-arm64.yml'
+  - project: 'libretro-infrastructure/ci-templates'
+    file: '/osx-arm64.yml'
 
   ################################## CELLULAR ################################
   # Android
@@ -88,6 +88,9 @@ include:
   #  file: '/dingux-arm32.yml'
 
   #################################### MISC ##################################
+  # Emscripten
+  #- project: 'libretro-infrastructure/ci-templates'
+  #  file: '/emscripten-static.yml'
 
 # Stages for building
 stages:
@@ -125,16 +128,16 @@ libretro-build-linux-i686:
     - .core-defs
 
 # MacOS 64-bit
-#libretro-build-osx-x64:
-#  extends:
-#    - .libretro-osx-x64-make-default
-#    - .core-defs
+libretro-build-osx-x64:
+  extends:
+    - .libretro-osx-x64-make-default
+    - .core-defs
 
 # MacOS ARM 64-bit
-#libretro-build-osx-arm64:
-#  extends:
-#    - .libretro-osx-arm64-make-default
-#    - .core-defs
+libretro-build-osx-arm64:
+  extends:
+    - .libretro-osx-arm64-make-default
+    - .core-defs
 
 ################################### CELLULAR #################################
 # Android ARMv7a
@@ -226,4 +229,11 @@ libretro-build-linux-i686:
 #libretro-build-miyoo-arm32:
 #  extends:
 #    - .libretro-miyoo-arm32-make-default
+#    - .core-defs
+
+#################################### MISC ##################################
+# Emscripten
+#libretro-build-emscripten:
+#  extends:
+#    - .libretro-emscripten-static-retroarch-master
 #    - .core-defs

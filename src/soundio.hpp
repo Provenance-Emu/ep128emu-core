@@ -25,8 +25,10 @@
 
 #ifndef EXCLUDE_SOUND_LIBS
 #include <sndfile.h>
-#include <portaudio.h>
 #endif // EXCLUDE_SOUND_LIBS
+#ifndef EP128EMU_LIBRETRO_CORE
+#include <portaudio.h>
+#endif // EP128EMU_LIBRETRO_CORE
 #ifdef ENABLE_MIDI_PORT
 #  include <portmidi.h>
 #  include <porttime.h>
@@ -72,7 +74,9 @@ namespace Ep128Emu {
      * (in 16 bit signed PCM format) to the audio output device and file.
      */
     virtual void sendAudioData(const int16_t *buf, size_t nFrames);
+#ifdef EP128EMU_LIBRETRO_CORE
     virtual void forwardAudioData(int16_t *buf_out, size_t* nFrames, int expectedFrames)=0;
+#endif
     /*!
      * Close the audio device.
      */
@@ -86,7 +90,7 @@ namespace Ep128Emu {
     virtual void openDevice();
   };
 
-#ifndef EXCLUDE_SOUND_LIBS
+#ifndef EP128EMU_LIBRETRO_CORE
   class AudioOutput_PortAudio : public AudioOutput {
    private:
     struct Buffer {
@@ -135,7 +139,7 @@ namespace Ep128Emu {
     virtual void openDevice();
   };
 
-#endif // EXCLUDE_SOUND_LIBS
+#endif // EP128EMU_LIBRETRO_CORE
 
 // --------------------------------------------------------------------------
 

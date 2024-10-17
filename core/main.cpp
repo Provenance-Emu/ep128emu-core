@@ -1,43 +1,46 @@
 /* TODO
 
-build for mac
-magyar nyelvű leírás is
+crash at save state when memory is extended (Sword of Ianna)
 double free crash at new game load sometimes
 save state for speaker and mono states
   new snapshot version
+emscripten - initial memory problem
+other builds
+database
 
-  format, hw, trainer detection from tzx / cdt
+hw and joystick support detection from tzx / cdt
   http://k1.spdns.de/Develop/Projects/zasm/Info/TZX%20format.html
   https://www.cpcwiki.eu/index.php?title=Format:CDT_tape_image_file_format&mobileaction=toggle_view_desktop
-  tapir format compatibility
+  new .ept format?
 
-doublecheck cpc and zx keyboard maps
+option to disable keyboard input
 
 gfx:
 crash amikor interlaced módban akarok menübe menni, mintha frame dupe-hoz lenne köze
 sw fb + interlace = crash
 info msg overlay
 long info msg with game instructions // inkább a collection részeként
-keyboard is stuck after entering menu (like ctrl+f1), upstroke not detected, should be reseted
+keyboard is stuck after entering menu (like ctrl+f1), upstroke not detected, should be reseted -- no solution?
+doublecheck zx keyboard map for 128, zx keyboard doc
 virtual keyboard
 
-core options v2
 check and include libretro common
 detailed type detection from content name
-cheat support
-m3u support (cpc 3 guerra)
-cp/m support (EP, CPC)
-locale support ep, cpc
-rom config for clkoff+hfont
+locale support from menu
+locale support for cpc
 
 low prio:
 ep128cfg support player 2 mapping
 info msg for other players
-TAPir format support
-opengl display support
+tzx format 0x18 compressed square wave (1 x cpc tosec, 3x zx tosec), 0x19 (~40 x zx tosec)
+tzx trainer support: ~20 out of all zx tosec, and 1 from cpc tosec
+EP IDE support
 demo record/play
 support for content in zip
 EP Mouse support
+achievement support
+test mp3 support with sndfile 1.1 - cmake won't find lame / mpeg123 when compiling libsndfile
+led driver for tape / disk loading - see comments inside
 
 */
 
@@ -76,6 +79,7 @@ EP Mouse support
 #include "libretro-funcs.hpp"
 #include "libretrodisp.hpp"
 #include "core.hpp"
+#include "libretro_core_options.h"
 #ifdef WIN32
 #include <windows.h>
 #endif // WIN32
@@ -100,14 +104,24 @@ retro_usec_t prev_frame_time = 0;
 float waitPeriod = 0.001;
 bool useSwFb = false;
 bool useHalfFrame = false;
-bool enableDiskControl = false;
-bool needsDiskControl = false;
 int borderSize = 0;
 bool soundHq = true;
-unsigned maxUsers;
-bool maxUsersSupported = true;
 bool canSkipFrames = false;
 bool enhancedRom = false;
+
+unsigned maxUsers;
+bool maxUsersSupported = true;
+
+unsigned diskIndex = 0;
+unsigned diskCount = 1;
+#define MAX_DISK_COUNT 10
+std::string diskPaths[MAX_DISK_COUNT];
+std::string diskNames[MAX_DISK_COUNT];
+bool diskEjected = false;
+
+bool tapeContent = false;
+bool diskContent = false;
+bool fileContent = false;
 
 Ep128Emu::VMThread              *vmThread    = (Ep128Emu::VMThread *) 0;
 Ep128Emu::EmulatorConfiguration *config      = (Ep128Emu::EmulatorConfiguration *) 0;
@@ -118,6 +132,7 @@ static retro_audio_sample_t audio_cb;
 static retro_audio_sample_batch_t audio_batch_cb;
 static retro_input_poll_t input_poll_cb;
 static retro_input_state_t input_state_cb;
+static retro_set_led_state_t led_state_cb;
 
 static void fallback_log(enum retro_log_level level, const char *fmt, ...)
 {
@@ -142,7 +157,7 @@ static void fileNameCallback(void *userData, std::string& fileName)
 
 void set_frame_time_cb(retro_usec_t usec)
 {
-  if (usec == 0 || usec > 1000000/50)
+  if (usec == 0 || usec > 2*1000000/50)
   {
     curr_frame_time = 1000000/50;
   }
@@ -154,6 +169,31 @@ void set_frame_time_cb(retro_usec_t usec)
 
 }
 
+/* LED interface */
+static unsigned int retro_led_state[2] = {0};
+static void update_led_interface(void)
+{
+
+   unsigned int led_state[2] = {0};
+   unsigned int l            = 0;
+
+   // TODO: power LED should go off during reset (even though original machine had no such thing)
+   led_state[0] = 1;
+   if (core)
+      led_state[1] = core->vm->getFloppyDriveLEDState() ? 1 : 0;
+   else
+      led_state[1] = 0;
+
+   for (l = 0; l < sizeof(led_state)/sizeof(led_state[0]); l++)
+   {
+      if (retro_led_state[l] != led_state[l])
+      {
+         log_cb(RETRO_LOG_DEBUG, "LED control: change LED nr. %d (%d)->(%d)\n",l,retro_led_state[l],led_state[l]);
+         retro_led_state[l] = led_state[l];
+         led_state_cb(l, led_state[l]);
+      }
+   }
+}
 
 static void update_keyboard_cb(bool down, unsigned keycode,
                                uint32_t character, uint16_t key_modifiers)
@@ -263,6 +303,163 @@ static void check_variables(void)
   if(vmThread) vmThread->resetKeyboard();
 }
 
+/* If ejected is true, "ejects" the virtual disk tray.
+ */
+static bool set_eject_state_cb(bool ejected) {
+  log_cb(RETRO_LOG_DEBUG, "Disk control: eject (%d)\n",ejected?1:0);
+  diskEjected = ejected;
+  return true;
+}
+
+/* Gets current eject state. The initial state is 'not ejected'. */
+static bool get_eject_state_cb(void) {
+//  log_cb(RETRO_LOG_DEBUG, "Disk control: get eject status (%d)\n",diskEjected?1:0);
+  return diskEjected;
+}
+
+/* Gets current disk index. First disk is index 0.
+ * If return value is >= get_num_images(), no disk is currently inserted.
+ */
+static unsigned get_image_index_cb(void) {
+//  log_cb(RETRO_LOG_DEBUG, "Disk control: get image index (%d)\n",diskIndex);
+  return diskIndex;
+}
+
+/* Sets image index. Can only be called when disk is ejected.
+ */
+static bool set_image_index_cb(unsigned index) {
+  log_cb(RETRO_LOG_DEBUG, "Disk control: change image to (%d)\n",index);
+  if (index>=diskCount) {
+    diskIndex = diskCount + 1;
+  } else {
+    diskIndex = index;
+    if (core) {
+      config = core->config;
+      if(diskContent) {
+        config->floppy.a.imageFile = diskPaths[index];
+        config->floppyAChanged = true;
+        log_cb(RETRO_LOG_DEBUG, "Disk control: new disk is %s\n",diskPaths[index].c_str());
+      } else if(tapeContent) {
+        config->tape.imageFile = diskPaths[index];
+        config->tapeFileChanged = true;
+        log_cb(RETRO_LOG_DEBUG, "Disk control: new tape is %s\n",diskPaths[index].c_str());
+      } else if (fileContent) {
+        std::string contentPath;
+        Ep128Emu::splitPath(diskPaths[index],contentPath,diskNames[index]);
+        config->fileio.workingDirectory = contentPath;
+        contentFileName=diskPaths[index];
+        config->fileioSettingsChanged = true;
+        log_cb(RETRO_LOG_DEBUG, "Disk control: new file is %s\n",diskPaths[index].c_str());
+     }
+     config->applySettings();
+    }
+  }
+  return true;
+}
+
+/* Gets total number of images which are available to use. */
+static unsigned get_num_images_cb(void) {return diskCount;}
+
+/* Replaces the disk image associated with index.
+ * Arguments to pass in info have same requirements as retro_load_game().
+ */
+static bool replace_image_index_cb(unsigned index,
+      const struct retro_game_info *info) {
+
+  log_cb(RETRO_LOG_DEBUG, "Disk control: replace image index (%d) to %s\n",index,info->path);
+  if (index >= diskCount) return false;
+  diskPaths[index] = info->path;
+  std::string contentPath;
+  Ep128Emu::splitPath(diskPaths[index],contentPath,diskNames[index]);
+  return true;
+}
+
+/* Adds a new valid index (get_num_images()) to the internal disk list.
+ * This will increment subsequent return values from get_num_images() by 1.
+ * This image index cannot be used until a disk image has been set
+ * with replace_image_index. */
+static bool add_image_index_cb(void) {
+  log_cb(RETRO_LOG_DEBUG, "Disk control: add image index (current %d)\n",diskCount);
+  if (diskCount >= MAX_DISK_COUNT) return false;
+  diskCount++;
+  return true;
+}
+
+/* Sets initial image to insert in drive when calling
+ * core_load_game().
+ * Returns 'false' if index or 'path' are invalid, or core
+ * does not support this functionality
+ */
+static bool set_initial_image_cb(unsigned index, const char *path) {return false;}
+
+/* Fetches the path of the specified disk image file.
+ * Returns 'false' if index is invalid (index >= get_num_images())
+ * or path is otherwise unavailable.
+ */
+static bool get_image_path_cb(unsigned index, char *path, size_t len) {
+  if (index >= diskCount) return false;
+  if(diskPaths[index].length() > 0)
+  strncpy(path, diskPaths[index].c_str(), len);
+  log_cb(RETRO_LOG_DEBUG, "Disk control: get image path (%d) %s\n",index,path);
+  return true;
+}
+
+/* Fetches a core-provided 'label' for the specified disk
+ * image file. In the simplest case this may be a file name
+ * Returns 'false' if index is invalid (index >= get_num_images())
+ * or label is otherwise unavailable.
+ */
+static bool get_image_label_cb(unsigned index, char *label, size_t len) {
+  if(index >= diskCount) return false;
+  if(diskNames[index].length() > 0)
+  strncpy(label, diskNames[index].c_str(), len);
+  //log_cb(RETRO_LOG_DEBUG, "Disk control: get image label (%d) %s\n",index,label);
+  return true;
+}
+
+static bool add_new_image_auto(const char *path) {
+
+  unsigned index = diskCount;
+  if (diskCount >= MAX_DISK_COUNT) return false;
+  diskCount++;
+  log_cb(RETRO_LOG_DEBUG, "Disk control: add new image (%d) as %s\n",diskCount,path);
+
+  diskPaths[index] = path;
+  std::string contentPath;
+  Ep128Emu::splitPath(diskPaths[index],contentPath,diskNames[index]);
+  return true;
+}
+
+static void scan_multidisk_files(const char *path) {
+
+  std::string filename(path);
+  std::string filePrefix;
+  std::string filePostfix;
+  std::string additionalFile;
+  std::map< std::string, std::string >::const_iterator  iter_multidisk;
+
+  for (iter_multidisk = Ep128Emu::multidisk_replacements.begin(); iter_multidisk != Ep128Emu::multidisk_replacements.end(); ++iter_multidisk)
+  {
+    size_t idx = filename.rfind((*iter_multidisk).first);
+    if(idx != std::string::npos) {
+      filePrefix = filename.substr(0,idx);
+      filePostfix = filename.substr(idx+(*iter_multidisk).first.length());
+      additionalFile = filePrefix + (*iter_multidisk).second.c_str() + filePostfix;
+
+      if(Ep128Emu::does_file_exist(additionalFile.c_str()))
+      {
+        log_cb(RETRO_LOG_INFO, "Multidisk additional file found: %s => %s\n",filename.c_str(), additionalFile.c_str());
+        if (!add_new_image_auto(additionalFile.c_str())) {
+          log_cb(RETRO_LOG_WARN, "Multidisk additional image add unsuccessful: %s\n",additionalFile.c_str());
+          break;
+        }
+      }
+    }
+  }
+}
+
+
+
 void retro_init(void)
 {
   struct retro_log_callback log;
@@ -273,12 +470,56 @@ void retro_init(void)
   else
     log_cb = fallback_log;
 
-  // actually it is the advanced disk control...
+  struct retro_disk_control_callback dccb =
+  {
+   set_eject_state_cb,
+   get_eject_state_cb,
+
+   get_image_index_cb,
+   set_image_index_cb,
+   get_num_images_cb,
+
+   replace_image_index_cb,
+   add_image_index_cb
+  };
+
+  struct retro_disk_control_ext_callback dccb_ext =
+  {
+   set_eject_state_cb,
+   get_eject_state_cb,
+
+   get_image_index_cb,
+   set_image_index_cb,
+   get_num_images_cb,
+
+   replace_image_index_cb,
+   add_image_index_cb,
+   set_initial_image_cb,
+
+   get_image_path_cb,
+   get_image_label_cb
+  };
+
   unsigned dci;
-  if (environ_cb(RETRO_ENVIRONMENT_GET_DISK_CONTROL_INTERFACE_VERSION, &dci))
-    enableDiskControl = true;
-  else
-    enableDiskControl = false;
+  if (environ_cb(RETRO_ENVIRONMENT_GET_DISK_CONTROL_INTERFACE_VERSION, &dci)) {
+    environ_cb(RETRO_ENVIRONMENT_SET_DISK_CONTROL_EXT_INTERFACE, &dccb_ext);
+    log_cb(RETRO_LOG_DEBUG, "Using extended disk control interface\n");
+  } else {
+    environ_cb(RETRO_ENVIRONMENT_SET_DISK_CONTROL_INTERFACE, &dccb);
+    log_cb(RETRO_LOG_DEBUG, "Using basic disk control interface\n");
+  }
+
+  struct retro_led_interface led_interface;
+  if(environ_cb(RETRO_ENVIRONMENT_GET_LED_INTERFACE, &led_interface)) {
+   if (led_interface.set_led_state && !led_state_cb) {
+      led_state_cb = led_interface.set_led_state;
+      log_cb(RETRO_LOG_INFO, "LED interface supported\n");
+    } else {
+      log_cb(RETRO_LOG_INFO, "LED interface not supported\n");
+    }
+  } else {
+    log_cb(RETRO_LOG_INFO, "LED interface not present\n");
+  }
 
   const char *system_dir = NULL;
   if (environ_cb(RETRO_ENVIRONMENT_GET_SYSTEM_DIRECTORY, &system_dir) && system_dir)
@@ -324,7 +565,7 @@ void retro_init(void)
     sizeof(retro_system_save_directory) - 1
   );
 
-  log_cb(RETRO_LOG_INFO, "Retro ROM DIRECTORY %s\n", retro_system_bios_directory);
+  log_cb(RETRO_LOG_DEBUG, "Retro ROM DIRECTORY %s\n", retro_system_bios_directory);
   log_cb(RETRO_LOG_DEBUG, "Retro SAVE_DIRECTORY %s\n", retro_system_save_directory);
   log_cb(RETRO_LOG_DEBUG, "Retro CONTENT_DIRECTORY %s\n", retro_content_directory);
 
@@ -379,9 +620,13 @@ void retro_get_system_info(struct retro_system_info *info)
 {
   memset(info, 0, sizeof(*info));
   info->library_name     = "ep128emu";
-  info->library_version  = "v1.0.0";
+  info->library_version  = "v1.2.7";
   info->need_fullpath    = true;
-  info->valid_extensions = "img|dsk|tap|dtf|com|trn|128|bas|cas|cdt|tzx|.";
+#ifndef EXCLUDE_SOUND_LIBS
+  info->valid_extensions = "img|dsk|tap|dtf|com|trn|128|bas|cas|cdt|tzx|wav|tvcwav|mp3|.";
+#else
+  info->valid_extensions = "img|dsk|tap|dtf|com|trn|128|bas|cas|cdt|tzx|wav|tvcwav|.";
+#endif // EXCLUDE_SOUND_LIBS
 }
 
 void retro_get_system_av_info(struct retro_system_av_info *info)
@@ -410,16 +655,14 @@ void retro_set_environment(retro_environment_t cb)
   environ_cb = cb;
 
   bool no_content = true;
-  cb(RETRO_ENVIRONMENT_SET_SUPPORT_NO_GAME, &no_content);
+  environ_cb(RETRO_ENVIRONMENT_SET_SUPPORT_NO_GAME, &no_content);
 
-  if (cb(RETRO_ENVIRONMENT_GET_LOG_INTERFACE, &logging))
+  if (environ_cb(RETRO_ENVIRONMENT_GET_LOG_INTERFACE, &logging))
     log_cb = logging.log;
   else
     log_cb = fallback_log;
 
-  environ_cb = cb;
-
-  static const struct retro_variable vars[] =
+/*  static const struct retro_variable vars[] =
   {
     { "ep128emu_wait", "Main thread wait (ms); 0|1|5|10" },
     { "ep128emu_sdhq", "High sound quality; 1|0" },
@@ -433,7 +676,9 @@ void retro_set_environment(retro_environment_t cb)
     { "ep128emu_afsp", "User 1 Autofire repeat delay; 1|2|4|8|16" },
     { NULL, NULL },
   };
-  cb(RETRO_ENVIRONMENT_SET_VARIABLES, (void*)vars);
+  environ_cb(RETRO_ENVIRONMENT_SET_VARIABLES, (void*)vars);*/
+  bool categories_supported;
+  libretro_set_core_options(environ_cb,&categories_supported);
 }
 
 void retro_set_audio_sample(retro_audio_sample_t cb)
@@ -486,11 +731,12 @@ static void audio_callback(void)
 static void audio_callback_batch(void)
 {
   size_t nFrames=0;
-  int exp = curr_frame_time*EP128EMU_SAMPLE_RATE/1000000;
-  //printf("expected : %d curr_frame_time: %d\n",exp,curr_frame_time);
+  int exp = int(float(curr_frame_time*EP128EMU_SAMPLE_RATE)/1000000.0f+0.5f);
 
   core->audioOutput->forwardAudioData((int16_t*)audioBuffer,&nFrames,exp);
-  //printf("sending frames: %d frame_time: %d\n",nFrames,curr_frame_time);
+  //printf("sending frames: %d exp %d frame_time: %d\n",nFrames,exp, curr_frame_time);
+  //if (nFrames != exp)
+  // printf("sending diff frames: %d exp %d frame_time: %d\n",nFrames,exp, curr_frame_time);
   audio_batch_cb((int16_t*)audioBuffer, nFrames);
 }
 
@@ -522,6 +768,9 @@ void retro_run(void)
   audio_callback_batch();
   core->sync_display();
   render();
+   /* LED interface */
+   if (led_state_cb)
+      update_led_interface();
 }
 
 bool header_match(const char* buf1, const unsigned char* buf2, size_t length)
@@ -534,6 +783,16 @@ bool header_match(const char* buf1, const unsigned char* buf2, size_t length)
     }
   }
   return true;
+}
+
+bool zx_header_match(const unsigned char* buf2)
+{
+  // as per original spec, "13 00 00 00" would fit, but it doesn't always match
+  // https://sinclair.wiki.zxnet.co.uk/wiki/TAP_format
+  // empirical boundaries are from scanning the tosec collection
+  if (buf2[0]>0xe && buf2[0]<0x22 && buf2[1] == 0x0 && (buf2[2] == 0x0 || buf2[2] == 0xff))
+    return true;
+  return false;
 }
 
 bool retro_load_game(const struct retro_game_info *info)
@@ -588,6 +847,8 @@ bool retro_load_game(const struct retro_game_info *info)
     log_cb(RETRO_LOG_DEBUG, "Content extension: %s \n",contentExt.c_str());
     Ep128Emu::splitPath(filename,contentPath,contentFile);
     contentBasename = contentFile;
+    diskPaths[0] = filename;
+    diskNames[0] = contentBasename;
     Ep128Emu::stringToLowerCase(contentBasename);
 
     int contentLocale = Ep128Emu::LOCALE_UK;
@@ -612,6 +873,7 @@ bool retro_load_game(const struct retro_game_info *info)
 
     std::string diskExt = "img";
     std::string tapeExt = "tap";
+    std::string tapeExtEp = "ept";
     std::string fileExtDtf = "dtf";
     std::string fileExtTvc = "cas";
     std::string diskExtTvc = "dsk";
@@ -619,11 +881,13 @@ bool retro_load_game(const struct retro_game_info *info)
     //std::string tapeExtZx = "tzx";
     std::string fileExtZx = "tap";
     std::string tapeExtCpc = "cdt";
+    std::string tapeExtTvc = "tvcwav";
 
     std::FILE *imageFile;
     const size_t nBytes = 64;
     uint8_t tmpBuf[nBytes];
     uint8_t tmpBufOffset128[nBytes];
+    uint8_t tmpBufOffset512[nBytes];
     static const char zeroBytes[nBytes] = "\0";
 
     imageFile = Ep128Emu::fileOpen(info->path, "rb");
@@ -638,12 +902,19 @@ bool retro_load_game(const struct retro_game_info *info)
     {
       log_cb(RETRO_LOG_DEBUG, "Game content file too short for full header analysis\n");
     };
+    std::fseek(imageFile, 512L, SEEK_SET);
+    if(std::fread(&(tmpBufOffset512[0]), sizeof(uint8_t), nBytes, imageFile) != nBytes)
+    {
+      log_cb(RETRO_LOG_DEBUG, "Game content file too short for full header analysis\n");
+    };
     std::fclose(imageFile);
 
     static const char *cpcDskFileHeader = "MV - CPCEMU";
     static const char *cpcExtFileHeader = "EXTENDED CPC DSK File";
     static const char *ep128emuTapFileHeader = "\x02\x75\xcd\x72\x1c\x44\x51\x26";
     static const char *epteFileMagic = "ENTERPRISE 128K TAPE FILE       ";
+    static const char *TAPirFileMagic = "\x00\x6A\xFF";
+    static const char *waveFileMagic = "RIFF";
     static const char *tzxFileMagic = "ZXTape!\032\001";
     static const char *tvcDskFileHeader = "\xeb\xfe\x90";
     static const char *epDskFileHeader1 = "\xeb\x3c\x90";
@@ -651,16 +922,17 @@ bool retro_load_game(const struct retro_game_info *info)
     static const char *epComFileHeader = "\x00\x05";
     static const char *epComFileHeader2 = "\x00\x06";
     static const char *epBasFileHeader = "\x00\x04";
-    // static const char *zxTapFileHeader = "\x13\x00\x00\x00";
+    static const char *mp3FileHeader1 = "\x49\x44\x33";
+    static const char *mp3FileHeader2 = "\xff\xfb";
     // Startup sequence may contain:
     // - chars on the keyboard (a-z, 0-9, few symbols like :
     // - 0xff as wait character
     // - 0xfe as "
     // - 0xfd as F1 (START)
     const char* startupSequence = "";
-    bool tapeContent = false;
-    bool diskContent = false;
-    bool fileContent = false;
+    tapeContent = false;
+    diskContent = false;
+    fileContent = false;
     int detectedMachineDetailedType = Ep128Emu::VM_config.at("VM_CONFIG_UNKNOWN");
 
     // start with longer magic strings - less chance of mis-detection
@@ -679,6 +951,13 @@ bool retro_load_game(const struct retro_game_info *info)
         tapeContent = true;
         startupSequence ="run\xfe\r\r";
       }
+      // TODO: replace with something else?
+      else if (contentExt == tapeExtEp)
+      {
+        detectedMachineDetailedType = Ep128Emu::VM_config.at("EP128_TAPE");
+        tapeContent=true;
+        startupSequence =" \xff\xff\xfd";
+      }
       else
       {
         detectedMachineDetailedType = Ep128Emu::VM_config.at("ZX128_TAPE");
@@ -686,7 +965,24 @@ bool retro_load_game(const struct retro_game_info *info)
         startupSequence ="\r";
       }
     }
-    else if(header_match(epteFileMagic,tmpBufOffset128,32) || header_match(ep128emuTapFileHeader,tmpBuf,8) /*|| contentExt == tapeExtSnd*/)
+    // tvcwav extension is made up, it is to avoid clash with normal wave file and also with retroarch's own wave player
+    else if(contentExt == tapeExtTvc && header_match(waveFileMagic,tmpBuf,4))
+    {
+      detectedMachineDetailedType = Ep128Emu::VM_config.at("TVC64_TAPE");
+      tapeContent=true;
+      startupSequence =" \xffload\r";
+    }
+    else if (contentExt == fileExtZx && zx_header_match(tmpBuf))
+    {
+      detectedMachineDetailedType = Ep128Emu::VM_config.at("ZX128_FILE");
+      fileContent=true;
+      startupSequence ="\r";
+    }
+    // All .tap files will fall back to be interpreted as EP128_TAPE
+    else if(header_match(epteFileMagic,tmpBufOffset128,32) || header_match(ep128emuTapFileHeader,tmpBuf,8) ||
+            header_match(waveFileMagic,tmpBuf,4) || header_match(TAPirFileMagic,tmpBufOffset512,3) ||
+            header_match(mp3FileHeader1,tmpBuf,3) || header_match(mp3FileHeader2,tmpBufOffset512,2) ||
+            contentExt == tapeExt )
     {
       detectedMachineDetailedType = Ep128Emu::VM_config.at("EP128_TAPE");
       tapeContent=true;
@@ -717,12 +1013,6 @@ bool retro_load_game(const struct retro_game_info *info)
         log_cb(RETRO_LOG_ERROR, "Content format not recognized!\n");
         return false;
       }
-    }
-    else if (contentExt == fileExtZx /*&& header_match(zxTapFileHeader,tmpBuf,4)*/)
-    {
-      detectedMachineDetailedType = Ep128Emu::VM_config.at("ZX128_FILE");
-      fileContent=true;
-      startupSequence ="\r";
     }
     else if (contentExt == fileExtDtf) {
       detectedMachineDetailedType = Ep128Emu::VM_config.at("EP128_FILE_DTF");
@@ -760,6 +1050,12 @@ bool retro_load_game(const struct retro_game_info *info)
       {
         config->tape.imageFile = info->path;
         config->tapeFileChanged = true;
+        // Todo: add tzx based advanced detection here
+        /*    tape = openTapeFile(fileName.c_str(), 0,
+                        defaultTapeSampleRate, bitsPerSample);*/
+      }
+      if (diskContent || tapeContent) {
+        scan_multidisk_files(info->path);
       }
       if (fileContent)
       {
@@ -793,6 +1089,30 @@ bool retro_load_game(const struct retro_game_info *info)
       log_cb(RETRO_LOG_ERROR, "Exception in load_game\n");
       throw;
     }
+
+    // ep128emu allocates memory per 16 kB segments
+    // actual place in the address map differs between ep/tvc/cpc/zx
+    // so all slots are scanned, but only 576 kB is offered as map
+    // to cover some new games that require RAM extension
+    struct retro_memory_descriptor desc[36];
+    memset(desc, 0, sizeof(desc));
+    int dindex=0;
+    for(uint8_t segment=0; dindex<32 ; segment++) {
+       if(core->vm->getSegmentPtr(segment)) {
+         desc[dindex].start=segment << 14;
+         desc[dindex].select=0xFF << 14;
+         desc[dindex].len= 0x4000;
+         desc[dindex].ptr=core->vm->getSegmentPtr(segment);
+         desc[dindex].flags=RETRO_MEMDESC_SYSTEM_RAM;
+         dindex++;
+       }
+       if(segment==0xFF) break;
+    }
+    struct retro_memory_map retromap = {
+        desc,
+        sizeof(desc)/sizeof(desc[0])
+    };
+    environ_cb(RETRO_ENVIRONMENT_SET_MEMORY_MAPS, &retromap);
 
     config->setErrorCallback(&cfgErrorFunc, (void *) 0);
     vmThread = core->vmThread;

@@ -81,10 +81,10 @@ contentfilename ""
 
 # Emulated machine type. Normally autodetected from content. Can be one of the following:
 # Enterprise:
-# EP128_DISK, EP128_TAPE, EP128_TAPE_NOCART, EP128_FILE, EP128_FILE_DTF
-# EP64_DISK, EP64_TAPE, EP64_TAPE_NOCART, EP64_FILE, EP64_FILE_DTF
+# EP128_DISK, EP128_TAPE, EP128_TAPE_NOCART, EP128_FILE, EP128_FILE_DTF, EP128_DISK_ISDOS
+# EP64_DISK, EP64_TAPE, EP64_TAPE_NOCART, EP64_FILE, EP64_FILE_DTF, EP64_DISK_ISDOS
 # TVC:
-# TVC64_FILE, TVC64_DISK
+# TVC64_FILE, TVC64_DISK, TVC64_TAPE
 # CPC (6128 unless noted):
 # CPC_TAPE, CPC_DISK, CPC_464_TAPE, CPC_664_DISK
 # ZX:
@@ -92,6 +92,7 @@ contentfilename ""
 # Variants with _DISK are for disk images, _TAPE for tape images
 # _FILE can be used for direct file reading (.cas for TVC, .tap for ZX, ,com/.bas/other extensions for EP)
 # _FILE_DTF is for DTF compressed files, _NOCART removes Basic cartridge
+# _DISK_ISDOS is for CP/M
 
 machineDetailedType ""
 
